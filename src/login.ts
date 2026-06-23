@@ -26,7 +26,7 @@ async function showMenu(): Promise<string> {
 async function addAccountFlow(): Promise<void> {
   console.log('\n--- Add Account ---')
   console.log('You can paste any of the following:')
-  console.log('  • The raw cookie value (UUID) — e.g. f52850d0-515e-445c-8b83-c3b22c0e49c5')
+  console.log('  • The raw cookie value (UUID) — e.g. a1b2c3d4-e5f6-7890-abcd-ef1234567890')
   console.log('  • The full Cookie header — e.g. sakana-chat=UUID; Path=/; Secure')
   console.log('  • The JSON array exported from a cookie browser extension (must contain a name="sakana-chat" entry)')
   console.log('')

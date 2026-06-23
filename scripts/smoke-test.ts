@@ -10,7 +10,7 @@ import { getUserInfo, createConversation, sendMessageStream } from '../src/servi
 import { SakanaStreamParser } from '../src/services/sakana-stream-parser.js'
 import { logger } from '../src/core/logger.js'
 
-const TEST_COOKIE = process.env.TEST_COOKIE || 'f52850d0-515e-445c-8b83-c3b22c0e49c5'
+const TEST_COOKIE = process.env.TEST_COOKIE || ''
 
 async function main() {
   logger.info('Test', 'Resetting database...')

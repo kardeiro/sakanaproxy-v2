@@ -121,7 +121,7 @@ O Sakana Chat autentica via um único cookie HTTP chamado `sakana-chat`. Para ob
 
 1. Acesse https://chat.sakana.ai/ no navegador e faça login (Google ou email).
 2. Abra as DevTools (`F12`) → aba **Application** → **Cookies** → `https://chat.sakana.ai`.
-3. Localize o cookie `sakana-chat` e copie seu valor (um UUID, ex.: `f52850d0-515e-445c-8b83-c3b22c0e49c5`).
+3. Localize o cookie `sakana-chat` e copie seu valor (um UUID, ex.: `a1b2c3d4-e5f6-7890-abcd-ef1234567890`).
 
 > **Dica**: Você também pode exportar todos os cookies via uma extensão como *EditThisCookie* (formato JSON) — o SakanaProxy detecta automaticamente a entrada `name="sakana-chat"`.
 
@@ -145,7 +145,7 @@ O menu interativo permite:
 
 Formas aceitas de colar o cookie:
 
-- Valor puro (UUID): `f52850d0-515e-445c-8b83-c3b22c0e49c5`
+- Valor puro (UUID): `a1b2c3d4-e5f6-7890-abcd-ef1234567890`
 - Cookie header completo: `sakana-chat=UUID; Path=/; Secure; HttpOnly`
 - Array JSON exportado de extensão de browser (deve conter uma entrada com `name="sakana-chat"`)
 
