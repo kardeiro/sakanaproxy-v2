@@ -121,6 +121,17 @@ export async function chatCompletions(c: Context) {
     const thinkingEnabled = isThinkingModel(modelId)
     const modelContextWindow = getModelContextWindow(modelId)
 
+    // --- Thinking mode: instruct model to wrap reasoning in <think> tags ---
+    // The Sakana Namazu model does NOT emit native `reasoning` stream events
+    // (unlike Qwen's `phase: thinking_summary`). To expose `reasoning_content`
+    // in the OpenAI-compatible response, we ask the model to wrap its private
+    // reasoning in <think>...</think> tags, then the stream-handler splits the
+    // output: text inside <think> becomes `reasoning_content`, text after
+    // becomes `content`. The `-no-thinking` model alias disables this behavior.
+    if (thinkingEnabled) {
+      systemPrompt += `\n\n# REASONING FORMAT\nBefore answering, think step-by-step about the question inside <think>...</think> tags. The text inside <think> tags will be shown to the user as your reasoning process. After </think>, write your final answer directly. Example:\n<think>\nLet me analyze the question...\n</think>\nFinal answer here.\n\nCRITICAL: Always use <think> tags for your reasoning. Do not output reasoning outside of <think> tags.\n`
+    }
+
     const estimatedTokens = estimateTokenCount(systemPrompt + prompt, modelId)
     let finalPrompt: string
     if (estimatedTokens > modelContextWindow - 1000) {
@@ -245,6 +256,7 @@ export async function chatCompletions(c: Context) {
         accountId: usedAccountId,
         conversationId,
         finalPrompt,
+        thinkingEnabled,
       })
     }
 
@@ -255,6 +267,7 @@ export async function chatCompletions(c: Context) {
       accountId: usedAccountId,
       conversationId,
       finalPrompt,
+      thinkingEnabled,
       streamOptions: body.stream_options,
     })
   } catch (err: any) {

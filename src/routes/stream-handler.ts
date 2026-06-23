@@ -6,6 +6,7 @@ import { removeStream } from '../core/stream-registry.js'
 import { releaseAccountInUse } from '../core/account-manager.js'
 import { deleteConversation } from '../services/sakana.js'
 import { SakanaStreamParser, type SakanaEvent } from '../services/sakana-stream-parser.js'
+import { ThinkTagParser } from '../services/think-tag-parser.js'
 import { StreamingToolParser } from '../tools/parser.js'
 
 export interface StreamHandlerContext {
@@ -15,6 +16,7 @@ export interface StreamHandlerContext {
   accountId: string
   conversationId: string
   finalPrompt: string
+  thinkingEnabled?: boolean
   streamOptions?: { include_usage?: boolean }
 }
 
@@ -172,6 +174,7 @@ export function handleStreamingResponse(c: Context, ctx: StreamHandlerContext): 
       const decoder = new TextDecoder()
       let toolCallIndex = 0
       const emittedToolIds = new Set<string>()
+      const thinkParser = ctx.thinkingEnabled ? new ThinkTagParser() : null
 
       while (true) {
         const { done, value } = await reader.read()
@@ -196,30 +199,74 @@ export function handleStreamingResponse(c: Context, ctx: StreamHandlerContext): 
               const token = evt.token
               if (!token) continue
               completionTokens += Math.ceil(token.length / 4)
-              // Pipe through tool parser to detect <tool_call> blocks
-              const { text, toolCalls } = toolParser.feed(token)
-              if (text) {
-                fullContent += text
-                writeContentDelta(text)
-              }
-              for (const tc of toolCalls) {
-                if (emittedToolIds.has(tc.id)) continue
-                emittedToolIds.add(tc.id)
-                writeToolCall(tc, toolCallIndex++)
+
+              // When thinking is enabled, first split the token stream into
+              // reasoning (inside <think>...</think>) and content (outside).
+              // Then run only the content portion through the tool parser.
+              if (thinkParser) {
+                const { content, reasoning } = thinkParser.feed(token)
+                if (reasoning) {
+                  fullReasoning += reasoning
+                  writeReasoningDelta(reasoning)
+                }
+                if (content) {
+                  const { text, toolCalls } = toolParser.feed(content)
+                  if (text) {
+                    fullContent += text
+                    writeContentDelta(text)
+                  }
+                  for (const tc of toolCalls) {
+                    if (emittedToolIds.has(tc.id)) continue
+                    emittedToolIds.add(tc.id)
+                    writeToolCall(tc, toolCallIndex++)
+                  }
+                }
+              } else {
+                // No thinking — pipe directly through tool parser
+                const { text, toolCalls } = toolParser.feed(token)
+                if (text) {
+                  fullContent += text
+                  writeContentDelta(text)
+                }
+                for (const tc of toolCalls) {
+                  if (emittedToolIds.has(tc.id)) continue
+                  emittedToolIds.add(tc.id)
+                  writeToolCall(tc, toolCallIndex++)
+                }
               }
               break
             }
             case 'reasoningToken':
+              // Native reasoning events from the upstream (rare for Sakana)
               if (evt.token) {
                 fullReasoning += evt.token
                 writeReasoningDelta(evt.token)
               }
               break
             case 'final':
-              // The provider's authoritative final text. If we already streamed
-              // the same content (common case), do nothing. If it differs
-              // (tool calls happened), emit the difference.
-              if (evt.text && evt.text !== fullContent) {
+              // The provider's authoritative final text.
+              //
+              // When thinking is enabled, the finalAnswer text contains BOTH
+              // the <think>...</think> reasoning block AND the final answer.
+              // We have already streamed both via the token stream (split into
+              // reasoning_content and content by thinkParser), so we must NOT
+              // re-emit the final text — that would duplicate the answer and
+              // leak <think> tags into the content.
+              //
+              // When thinking is disabled, the final text equals the streamed
+              // content; if it differs (tool calls), emit only the difference.
+              if (thinkParser) {
+                // Thinking mode: trust the streamed content. Only emit if we
+                // somehow have no content at all (edge case).
+                if (!fullContent && evt.text) {
+                  // Strip any <think> blocks before emitting as content
+                  const stripped = evt.text.replace(/<think>[\s\S]*?<\/think>/g, '').trim()
+                  if (stripped) {
+                    fullContent = stripped
+                    writeContentDelta(stripped)
+                  }
+                }
+              } else if (evt.text && evt.text !== fullContent) {
                 if (evt.text.startsWith(fullContent)) {
                   const extra = evt.text.slice(fullContent.length)
                   if (extra) {
@@ -253,7 +300,27 @@ export function handleStreamingResponse(c: Context, ctx: StreamHandlerContext): 
         }
       }
 
-      // Stream ended without finalAnswer — flush tool parser and close
+      // Stream ended without finalAnswer — flush parsers and close
+      if (thinkParser) {
+        const thinkFlush = thinkParser.flush()
+        if (thinkFlush.reasoning) {
+          fullReasoning += thinkFlush.reasoning
+          writeReasoningDelta(thinkFlush.reasoning)
+        }
+        if (thinkFlush.content) {
+          const { text, toolCalls } = toolParser.feed(thinkFlush.content)
+          if (text) {
+            fullContent += text
+            writeContentDelta(text)
+          }
+          for (const tc of toolCalls) {
+            if (emittedToolIds.has(tc.id)) continue
+            emittedToolIds.add(tc.id)
+            writeToolCall(tc, toolCallIndex++)
+          }
+        }
+      }
+
       const flush = toolParser.flush()
       if (flush.text) {
         fullContent += flush.text
@@ -286,6 +353,7 @@ export async function handleNonStreamingResponse(
 ): Promise<any> {
   const parser = new SakanaStreamParser()
   const toolParser = new StreamingToolParser([])
+  const thinkParser = ctx.thinkingEnabled ? new ThinkTagParser() : null
   const reader = ctx.stream.getReader()
   const decoder = new TextDecoder()
   let fullContent = ''
@@ -304,25 +372,64 @@ export async function handleNonStreamingResponse(
       for (const evt of events) {
         if (evt.kind === 'token' && evt.token) {
           completionTokens += Math.ceil(evt.token.length / 4)
-          const { text, toolCalls } = toolParser.feed(evt.token)
-          if (text) fullContent += text
-          for (const tc of toolCalls) {
-            if (emittedToolIds.has(tc.id)) continue
-            emittedToolIds.add(tc.id)
-            toolCallsOut.push({
-              id: tc.id,
-              type: 'function',
-              function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
-            })
+
+          if (thinkParser) {
+            const { content, reasoning } = thinkParser.feed(evt.token)
+            if (reasoning) fullReasoning += reasoning
+            if (content) {
+              const { text, toolCalls } = toolParser.feed(content)
+              if (text) fullContent += text
+              for (const tc of toolCalls) {
+                if (emittedToolIds.has(tc.id)) continue
+                emittedToolIds.add(tc.id)
+                toolCallsOut.push({
+                  id: tc.id,
+                  type: 'function',
+                  function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+                })
+              }
+            }
+          } else {
+            const { text, toolCalls } = toolParser.feed(evt.token)
+            if (text) fullContent += text
+            for (const tc of toolCalls) {
+              if (emittedToolIds.has(tc.id)) continue
+              emittedToolIds.add(tc.id)
+              toolCallsOut.push({
+                id: tc.id,
+                type: 'function',
+                function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+              })
+            }
           }
         } else if (evt.kind === 'reasoningToken' && evt.token) {
           fullReasoning += evt.token
         } else if (evt.kind === 'final') {
-          if (evt.text) {
-            fullContent = toolParser.flush().text
-              ? fullContent
-              : evt.text
+          // The final answer text from the provider does not include <think>
+          // tags (those are part of the streamed content only). Trust the
+          // accumulated fullContent from the stream.
+          if (evt.text && !fullContent) {
+            fullContent = evt.text
           }
+        }
+      }
+    }
+
+    // Flush think parser (in case stream ended inside <think>)
+    if (thinkParser) {
+      const thinkFlush = thinkParser.flush()
+      if (thinkFlush.reasoning) fullReasoning += thinkFlush.reasoning
+      if (thinkFlush.content) {
+        const { text, toolCalls } = toolParser.feed(thinkFlush.content)
+        if (text) fullContent += text
+        for (const tc of toolCalls) {
+          if (emittedToolIds.has(tc.id)) continue
+          emittedToolIds.add(tc.id)
+          toolCallsOut.push({
+            id: tc.id,
+            type: 'function',
+            function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+          })
         }
       }
     }
