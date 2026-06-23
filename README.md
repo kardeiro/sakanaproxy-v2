@@ -1,4 +1,4 @@
-# SakanaProxy
+# SakanaProxy v2
 
 Proxy API local compatível com OpenAI que roteia requisições para o **Sakana Chat (chat.sakana.ai)** usando cookies de sessão. Suporte a múltiplas contas com rotação automática, streaming NDJSON→SSE, modo de pensamento (reasoning), execução de ferramentas e armazenamento em SQLite.
 
@@ -70,8 +70,8 @@ graph TD
 ### Via git (Local)
 
 ```bash
-git clone https://github.com/kardeiro/sakanaproxy.git
-cd sakanaproxy
+git clone https://github.com/kardeiro/sakanaproxy-v2.git
+cd sakanaproxy-v2
 npm install
 ```
 
@@ -303,7 +303,7 @@ services:
 ## Estrutura do Projeto
 
 ```
-sakanaproxy/
+sakanaproxy-v2/
 ├── bin/
 │   └── sakanaproxy.mjs          # Entry point do CLI binário
 ├── src/
